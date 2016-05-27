@@ -156,6 +156,7 @@ public class UserProcess {
 	int amount = 0;
 
 	while (length > 0) {
+		//get the page number from virtual address
 	    int vpn = Processor.pageFromAddress(vaddr);
 	    int off = Processor.offsetFromAddress(vaddr);
 
@@ -369,7 +370,7 @@ public class UserProcess {
 
 	for (int vpn=0; vpn<numPages; vpn++) {
 	    int ppn = ((Integer)UserKernel.freePages.removeFirst()).intValue();
-
+	    //True or false?
 	    pageTable[vpn] = new TranslationEntry(vpn, ppn,
 						  true, false, false, false);
 	}
