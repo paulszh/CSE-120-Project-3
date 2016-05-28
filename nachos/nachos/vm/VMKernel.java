@@ -39,22 +39,46 @@ public class VMKernel extends UserKernel {
 		super.run();
 	}
 
-	public int pageFaultHandler(){
-		//freePageList is not empty
-		if(freeList.size() != 0){
-			int ppn = ((Integer)UserKernel.freeList.removeFirst()).intValue();
-		}
-		else{
-
-		}
-
-	}
-
 	/**
 	 * Terminate this kernel. Never returns.
 	 */
 	public void terminate() {
 		super.terminate();
+	}
+
+	/*
+	 * Implements the clock algorithm for the page eviction strategy.
+	 * LOTS OF TODOs...
+	 */
+	private frameMemoryBlock evictPage(){
+		// Initialize Conditional variable here and call sleep() when
+		// all the pages are pined
+
+
+		// while the page has not found, keeps running the clock alg. in loop
+
+		// check for several conditions:
+
+		// 1. evict the page that does not have a process. break out.
+
+		// 2. page has been used, set .used flag to true
+
+		// 3. evicts the current page
+	}
+
+	/*
+	 * Wrapper class to account for each block in the global data structure.
+	 * Check for pinned status of pages and which process owns the page.
+	 * Read write up design section: Global Memory Accounting
+	 */
+	private static class frameMemoryBlock{
+		frameMemoryBlock(int ppn){
+			translationEntry = new TranslationEntry(-1, ppn, false, false, false, false);
+			pinned = false;
+		}
+		TranslationEntry translationEntry;
+		VMProcess process;
+		boolean pinned;
 	}
 
 	// dummy variables to make javac smarter
@@ -65,6 +89,9 @@ public class VMKernel extends UserKernel {
 	public static Lock memoryLock;
 	//globale freelist 
 	public static LinkedList freeList = new LinkedList();
+
+	// global array to track pinned pages and associated processes
+	private frameMemoryBlock[] physMap = new frameMemoryBlock[Machine.processor().getNumPhysPages()];
 
 	private static final char dbgVM = 'v';
 }

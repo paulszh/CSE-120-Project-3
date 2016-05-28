@@ -21,22 +21,31 @@ public class VMProcess extends UserProcess {
 	 * Called by <tt>UThread.saveState()</tt>.
 	 */
 	public void saveState() {
-		//TLB miss
-		//save TLB to pageTable 
-		//invalid each entry in TLB
-		int TLBSize = Machine.processor().getTLBSize();
+		// Need to:
+		// 1. Invalidate all entries in the page table
+		// TODO 2. Completely reload the TLB 
+
 		TranslationEntry entry = null;
+
 		//invalid all the entry in TLB
-		for(int i = 0; i < TLBSize; i++){
-
+		for(int i = 0; i < Machine.processor().getTLBSize(); i++){
 			entry = Machine.processor().readTLBEntry(i);
-			//sycn the dirty bit in page table
 
-			updatePageTable(entry.vpn, entry);
-			//pageTable[entry.vpn].dirty = entry.dirty;
+
+		/*	TODO update the TranslationEntry in the physical page allocation.
+
+			p.s. need to know the 'coreMap' --> which basically maintains
+			information about physical page alocation (for replacement)
+
+			if (entry.valid){
+				TranslationEntry pageEntry = pageTable[entry.ppn].TranslationEntry;
+
+			}
+		*/
+			// Simple implementation for now.
+			// Set all TLB entries to be invalid
 			entry.valid = false;
 		}
-		//super.saveState();
 	}
 
 	/**
@@ -83,8 +92,8 @@ public class VMProcess extends UserProcess {
 	}
 
 	private void handleTLBMisss(){
+		VMkernel.memoryLock.acquire();
 
-		//VMkernel.memoryLock.acquire();
 		int vaddress = Machine.processor().readRegister(Processor.regBadVAddr);
 		int vpn = Machine.processor().pageFromAddress(vaddress);
 		//need to check if vpn is out of bound
@@ -126,22 +135,15 @@ public class VMProcess extends UserProcess {
 			Machine.processor().writeTLBEntry(index,ptEntry);
 		}
 		else{
-			VMkernel.pageFaultHandler(ptEntry.ppn);
+		//	VMkernel.pageFaultHandler(ptEntry.ppn);
 
 		}
 		//need to handle the case: ptEntry is invalid;
 
-		//VMkernel.memoryLock.release();
+		VMkernel.memoryLock.release();
 
 	}
 
-	private void updatePageTable(int vpn, TranslationEntry entry){
-		TranslationEntry toUpdate = pageTable[vpn];
-		toUpdate.dirty = entry.dirty;
-		toUpdate.readOnly = entry.readOnly; 
-		toUpdate.used = entry.used;
-		toUpdate.valid = entry.valid;
-	}
 
 	/**
 	 * Handle a user exception. Called by <tt>UserKernel.exceptionHandler()</tt>
