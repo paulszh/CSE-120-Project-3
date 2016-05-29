@@ -72,8 +72,20 @@ public class VMKernel extends UserKernel {
 	 *
 	 * @ switched indicate if a context switch happened
 	 */
-	public syncTLBEntry(boolean switched){
+	public void syncTLBEntry(){
+		TranslationEntry entry = null;
+		for(int i = 0; i < Machine.processor().getTLBSize(); i++){
+			entry = Machine.processor().readTLBEntry(i);
+			if(entry.valid){
+				TranslationEntry physEntry = physMap[entry.ppn].translationEntry;
+				physEntry.dirty = entry.dirty;
+				physEntry.used = entry.used;
 
+				entry.valid = false;
+			}
+			// sync back to page table
+			Machine.processor().writeTLBEntry(i, entry);
+		}
 	}
 
 
@@ -83,6 +95,7 @@ public class VMKernel extends UserKernel {
 	 * Read write up design section: Global Memory Accounting
 	 */
 	private static class frameMemoryBlock{
+
 		frameMemoryBlock(int ppn){
 			translationEntry = new TranslationEntry(-1, ppn, false, false, false, false);
 			pinned = false;
