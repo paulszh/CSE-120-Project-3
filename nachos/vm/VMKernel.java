@@ -66,6 +66,17 @@ public class VMKernel extends UserKernel {
 		// 3. evicts the current page
 	}
 
+	/**
+	 * Sync TLB entries with page table entries since users can only
+	 * manipulate the TLB entried.
+	 *
+	 * @ switched indicate if a context switch happened
+	 */
+	public syncTLBEntry(boolean switched){
+
+	}
+
+
 	/*
 	 * Wrapper class to account for each block in the global data structure.
 	 * Check for pinned status of pages and which process owns the page.

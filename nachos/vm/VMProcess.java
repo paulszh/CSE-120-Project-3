@@ -21,15 +21,17 @@ public class VMProcess extends UserProcess {
 	 * Called by <tt>UThread.saveState()</tt>.
 	 */
 	public void saveState() {
+
+		VMKernel.syncTLBEntry(true);
 		// Need to:
 		// 1. Invalidate all entries in the page table
 		// TODO 2. Completely reload the TLB 
 
-		TranslationEntry entry = null;
+	//	TranslationEntry entry = null;
 
 		//invalid all the entry in TLB
-		for(int i = 0; i < Machine.processor().getTLBSize(); i++){
-			entry = Machine.processor().readTLBEntry(i);
+	//	for(int i = 0; i < Machine.processor().getTLBSize(); i++){
+	//		entry = Machine.processor().readTLBEntry(i);
 
 
 		/*	TODO update the TranslationEntry in the physical page allocation.
@@ -44,8 +46,8 @@ public class VMProcess extends UserProcess {
 		*/
 			// Simple implementation for now.
 			// Set all TLB entries to be invalid
-			entry.valid = false;
-		}
+	//		entry.valid = false;
+	//	}
 	}
 
 	/**
@@ -93,17 +95,16 @@ public class VMProcess extends UserProcess {
 
 	private void handleTLBMisss(){
 		VMkernel.memoryLock.acquire();
-
 		int vaddress = Machine.processor().readRegister(Processor.regBadVAddr);
 		int vpn = Machine.processor().pageFromAddress(vaddress);
 		//need to check if vpn is out of bound
 		if(vpn > pageTable.length || vpn < 0){
 			Lib.debug(dbgProcess, "illegal memory access");
 		}
-		//get the page table entry from VPN
+		// TODO get the page table entry from VPN
+		// If the ppn of this entry equals the other entry,
+		// would need to invalidate it.
 		TranslationEntry ptEntry = pageTable[vpn];
-	
-		//need to check if ptEntry is valid,assume it is valid here
 
 		//Get the size of TLB
 		int TLBSize = Machine.processor().getTLBSize();
@@ -111,15 +112,16 @@ public class VMProcess extends UserProcess {
 		TranslationEntry entry = null;
 
 		int index = -1;
-
+		Process faultProcess = Machine.processor();
 		for(int i = 0; i < TLBSize; i++){
+			entry = faultProcess.readTLBEntry(i);
 
-			entry = Machine.processor().readTLBEntry(i);
-
+			// For now, simple implentation when valid bit is found
+			// ... need to set the dirty bits and used bits later
 			if(!entry.valid){
-				//the entry is invalid, can be replaced directly
 				entry.valid = true;
 				index = i;
+				faultProcess.writeTLBEntry(index, ptEntry);
 				break;
 			}
 
@@ -128,20 +130,17 @@ public class VMProcess extends UserProcess {
 		if(index == -1){
 			index = Lib.random(TLBSize);
 			entry = Machine.processor().readTLBEntry(index);
-		}
 
-		if(ptEntry.valid){
-			updatePageTable(ptEntry.vpn, entry);
-			Machine.processor().writeTLBEntry(index,ptEntry);
-		}
-		else{
-		//	VMkernel.pageFaultHandler(ptEntry.ppn);
+			// TODO
+			// propage the info down onto memory (page swap)
+			// ...
 
+			index.writeTLBEntry(index, ptEntry);
 		}
-		//need to handle the case: ptEntry is invalid;
+		// TODO
+		// unpin the physical page
 
 		VMkernel.memoryLock.release();
-
 	}
 
 
