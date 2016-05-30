@@ -21,7 +21,7 @@ public class VMProcess extends UserProcess {
 	 * Called by <tt>UThread.saveState()</tt>.
 	 */
 	public void saveState() {
-		VMKernel.syncTLBEntry();
+		VMKernel.syncTLBEntry(true);
 	}
 
 	/**

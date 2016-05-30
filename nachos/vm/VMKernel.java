@@ -51,11 +51,27 @@ public class VMKernel extends UserKernel {
 	 * LOTS OF TODOs...
 	 */
 	private frameMemoryBlock evictPage(){
+		memoryLock.acquire();
 		// Initialize Conditional variable here and call sleep() when
-		// all the pages are pined
+		// all the pages are pinned
+		Int numPagesPinned = 0;
+		Int numPhysPages = Machine.processor().getNumPhysPages();
 
+		for (int i = 0; i < numPhysPages; ++i){
+			if(physMap[i].pinned == true){
+				numPagesPinned++;
+			}
+		}
+		if(numPagesPinned == numPhysPages) { pinnedPages.sleep(); }
+
+		syncTLBEntry(false);
 
 		// while the page has not found, keeps running the clock alg. in loop
+		int clockPin = 0;
+		boolean pageFound = false;
+		while(!pageFound){
+
+		}
 
 		// check for several conditions:
 
@@ -64,6 +80,8 @@ public class VMKernel extends UserKernel {
 		// 2. page has been used, set .used flag to true
 
 		// 3. evicts the current page
+
+		memoryLock.release();
 	}
 
 	/**
@@ -72,7 +90,7 @@ public class VMKernel extends UserKernel {
 	 *
 	 * @ switched indicate if a context switch happened
 	 */
-	public void syncTLBEntry(){
+	public void syncTLBEntry(boolean contextSwitch){
 		TranslationEntry entry = null;
 		for(int i = 0; i < Machine.processor().getTLBSize(); i++){
 			entry = Machine.processor().readTLBEntry(i);
@@ -80,8 +98,9 @@ public class VMKernel extends UserKernel {
 				TranslationEntry physEntry = physMap[entry.ppn].translationEntry;
 				physEntry.dirty = entry.dirty;
 				physEntry.used = entry.used;
-
-				entry.valid = false;
+				if(contextSwitch){
+					entry.valid = false;
+				}
 			}
 			// sync back to page table
 			Machine.processor().writeTLBEntry(i, entry);
@@ -95,7 +114,6 @@ public class VMKernel extends UserKernel {
 	 * Read write up design section: Global Memory Accounting
 	 */
 	private static class frameMemoryBlock{
-
 		frameMemoryBlock(int ppn){
 			translationEntry = new TranslationEntry(-1, ppn, false, false, false, false);
 			pinned = false;
@@ -113,6 +131,8 @@ public class VMKernel extends UserKernel {
 	public static Lock memoryLock;
 	//globale freelist 
 	public static LinkedList freeList = new LinkedList();
+	// condition variable to track if all pages are pinned
+	public static Condition pinnedPages = new Condtion();
 
 	// global array to track pinned pages and associated processes
 	private frameMemoryBlock[] physMap = new frameMemoryBlock[Machine.processor().getNumPhysPages()];
