@@ -52,8 +52,9 @@ public class VMKernel extends UserKernel {
 	 */
 	public void terminate() {
 		super.terminate();
-		//File.close()
-		//ThreadKernel.filesy stem.remove()
+		// close the files upon retrun
+		File.close();
+		ThreadedKernel.fileSystem.remove("swapFile");
 	}
 	
 	
