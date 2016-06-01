@@ -52,9 +52,8 @@ public class VMKernel extends UserKernel {
 	 */
 	public void terminate() {
 		super.terminate();
-		// close the files upon retrun
-		File.close();
-		ThreadedKernel.fileSystem.remove("swapFile");
+		//File.close()
+		//ThreadKernel.filesy stem.remove()
 	}
 	
 	
@@ -78,7 +77,7 @@ public class VMKernel extends UserKernel {
 		if(byteRead != pageSize){
 			Lib.debug(dbgVM, "readVirtualMemory failed");
 		}
-		//get a free swap Pages
+		//FIXME get a free swap Pages   
 		spn = getFreeSwapPages();
 		//set the value of the current file pointer
 		File.seek(spn*pageSize);
@@ -122,8 +121,7 @@ public class VMKernel extends UserKernel {
 		//free the space in freeswapPages
 		freeSwapPage(spn);
 		//TODO set the dirty bit and update the inverted table
-		//set the dirty bit to true
-		process.pageTable[vpn].dirty = true;
+	
 		//update the Inverted page table. This time, link the ppn with the vpn
 		//FIXME: NEED A LOCK HERE
 		IPTable[ppn].vpn = vpn;
@@ -164,11 +162,11 @@ public class VMKernel extends UserKernel {
 		
 		int idx = (clockHandIdx+1)% numPhysPages; 
 		
-		allPinnedLock.acquire();
-		//if pinnedCount equals to the number of phyiscal pages, then all the physical pages are pinned
-		if(pinnedCount == numPhysPages){
-			allPinned.sleep();
-		}
+//		allPinnedLock.acquire();
+//		//if pinnedCount equals to the number of phyiscal pages, then all the physical pages are pinned
+//		if(pinnedCount == numPhysPages){
+//			allPinned.sleep();
+//		}
 		//there must be a unpinned page, loop through the IPTable and find it
 		while(true){
 			idx = (clockHandIdx+1)% numPhysPages; 
@@ -176,7 +174,7 @@ public class VMKernel extends UserKernel {
 			if(!IPTable[idx].pin)
 				break;
 		}
-		allPinnedLock.release();
+//		allPinnedLock.release();
 		return idx;
 		
 	}
@@ -200,15 +198,13 @@ public class VMKernel extends UserKernel {
 				if(entry.dirty){
 				//FIXME, NEED TO CHECK if swapped out with no error
 					int spn = swapOut(vpn, ownerProcess);
-					//need to record the spn, we can use entry's vpn to record the spn, 
-					//since the current entry is invalid
 				
 					//this entry has been swapped out, so we have to set it to be invalid
-					//However, we still need to use it's vpn to record the spn
 					ownerProcess.recordSPN(vpn,spn);
-					
+					//the entry has been swapped out, need to set to invalid
+					entry.valid  = false;
+					break;	
 				}
-				break;
 				//FIXME: Do we need to explicitly handle the case when readonly is true?	
 			}
 			

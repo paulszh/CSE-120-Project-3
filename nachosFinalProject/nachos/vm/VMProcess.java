@@ -20,20 +20,21 @@ public class VMProcess extends UserProcess {
 	 * Save the state of this process in preparation for a context switch.
 	 * Called by <tt>UThread.saveState()</tt>.
 	 */
-	
 	public void saveState() {
 		syncTLBEntry();
 	}
 	
 	
 	public void syncTLBEntry(){
+		
 		for(int i = 0; i < Machine.processor().getTLBSize(); i++){
 			
 			TranslationEntry entry = Machine.processor().readTLBEntry(i);
 			
 			if(entry.valid){
-				// Sync TLB Entries with Page Table Entries
+			
 				pageTable[entry.vpn].dirty = entry.dirty;
+				
 				pageTable[entry.vpn].used = entry.used;
 			}
 			
@@ -59,18 +60,51 @@ public class VMProcess extends UserProcess {
 		return 0;
 	}
 
+//	@Override 
+//    public int readVirtualMemory(int vaddr, byte[] data, int offset,
+//			 int length) {
+//		Lib.assertTrue(offset >= 0 && length >= 0 && offset+length <= data.length);
+//
+//		byte[] memory = Machine.processor().getMemory();
+//
+//		int amount = 0;
+//
+//		while (length > 0) {
+//			//get the page number from virtual address
+//			int vpn = Processor.pageFromAddress(vaddr);
+//			int off = Processor.offsetFromAddress(vaddr);
+//
+//			int transfer = Math.min(length, pageSize-off);
+//
+//			int ppn = pinVirtualPage(vpn, false);
+//			if (ppn == -1)
+//				break;
+//
+//			System.arraycopy(memory, ppn*pageSize + off, data, offset,transfer);
+//
+//			unpinVirtualPage(vpn);
+//   
+//			vaddr += transfer;
+//			offset += transfer;
+//			amount += transfer;
+//			length -= transfer;	    
+//		}
+//
+//		return amount;
+//	}
+//	
+	
+	
 	/**
 	 * Initializes page tables for this process so that the executable can be
 	 * demand-paged.
 	 * 
-	 * This method should record the mapping of VPN .. section and offset
-	 * Only called once per process
-	 * 
 	 * @return <tt>true</tt> if successful.
 	 */
 	protected boolean loadSections() {
+		//CREATE A PAGE TABLE ALL THE ENTRY IS FALSE
 	//VMkernel.memoryLock.acquire();
-	// 
+
 	if (UserKernel.freePages.size() < numPages) {
 	    UserKernel.memoryLock.release();
 	    coff.close();
@@ -80,7 +114,7 @@ public class VMProcess extends UserProcess {
 
 	pageTable = new TranslationEntry[numPages];
 	swapPos = new int[numPages];
-	// lazy loading after a TLB miss occurs
+
 	for (int i=0; i<numPages; i++) {
 	    pageTable[i] = new TranslationEntry(i, -1,
 						  false, false, false, false);
@@ -88,26 +122,6 @@ public class VMProcess extends UserProcess {
 	    swapPos[i] = -1;
 	}
 	
-	// *** Same as the UserProcess.java??
-	// Lazy loading means always returning true
-	// Loads the Coff sections into memory
-	for (int j = 0; j < coff.getNumSections(); ++j){
-		CoffSection section = coff.getSection(j);
-		for(int k = 0; k < section.getLength(); ++k){
-			int vpn = section.getFirstVPN() + k;
-			pageTable[vpn].readOnly = section.isReadOnly();
-			section.loadPage(k, pageTable[vpn].ppn);
-		}
-	}
-	
-	// maps out stack pages???? Not understanding
-	/* make sure you understands stackPages well enough before uncomment this
-	for(int s = numPages - (stackPages + 1); s < numPages; ++s){
-		pageTable[s].valid = false;
-		pageTable[s].readOnly = false;
-		pageTable[s].dirty = false;
-		pageTable[s].vpn = s;
-	} */
 	
 	//VMkernel.memoryLock.release();
 		return true;
@@ -117,18 +131,7 @@ public class VMProcess extends UserProcess {
 	 * Release any resources allocated by <tt>loadSections()</tt>.
 	 */
 	protected void unloadSections() {
-		// acquire a lock
-		for(int i = 0; i < pageTable.length; ++i){
-			if(pageTable[i].readOnly == false && pageTable[i].valid == false){
-				// TODO 
-				// free the swap file space here... use pageTable[i].vpn
-			}
-		}
-		
 		super.unloadSections();
-		// *** close the Coff here??
-	//	coff.close();
-		// release the lock
 	}
 	
 	
@@ -155,9 +158,7 @@ public class VMProcess extends UserProcess {
 	
 		int ppn;
 		//FIXME need a lock here
-		//VMKernel.pageFaultLock.acquire();
-		
-		//FIXME: Assume the page we need is in the swap file, need to fix it later(part 3)
+	
 		//Case: freepageList is not empty
 		if(!VMKernel.freePages.isEmpty()){
 			//allocate one from list
@@ -165,11 +166,10 @@ public class VMProcess extends UserProcess {
 			
 		}
 		else{
-			//sync TLB entries
-			// ***** TO CHECK
-			// Is this the right way to sync TLB entries??
+			//sync TLB entries before evicting
 			updatePageTable();
-			//select a victim for replacement
+			//select a victim for replacement and swap out a page
+			//FIXME NEED A LOCK HERE 
 			ppn = VMKernel.selectReplacementEntry();	
 			//need to update TLB immediately. since some entry in pageTable might have changed
 			updateTLB();
@@ -177,12 +177,60 @@ public class VMProcess extends UserProcess {
 		
 		//map the old invalid entry to the new ppn
 		pageTable[vpn].ppn = ppn;
+		//set the current entry to valid
 		pageTable[vpn].valid = true;
-		//then swap in from the disk , need to map ppn with vpn in the inverted page table
-		VMKernel.swapIn(ppn, vpn, this);
+		//mark as used
+		pageTable[vpn].used = true;
+		//set the dirty bit to true
+		pageTable[vpn].dirty = true;
+		
+		//pick the source to read the data in
+		if( swapPos[vpn] != -1){	
+			//then swap in from the disk , need to map ppn with vpn in the inverted page table
+			VMKernel.swapIn(ppn, vpn, this);
+		}
+		//The data we need is in the coff file, load on demand(load one page everytime)
+		else{
+			loadFromCoffFile(vpn,ppn);
+		}
+		
+		
 		return ppn;
 		
+		
 	}
+	
+	//only one page at a time
+	private void loadFromCoffFile(int vpn,int ppn){
+		
+		int coffLength=numPages-9;
+		if(vpn<coffLength)
+    	{
+    		for (int s=0; s<coff.getNumSections(); s++) {
+    		    CoffSection section = coff.getSection(s);
+    		    
+    		    if (vpn-section.getFirstVPN()<section.getLength())
+    		    {
+    		    	Lib.debug(dbgVM, "\tinitializing vpn: " + vpn +
+        		    		", ppn: " + ppn
+        			      + "; section "+ section.getName()+" has "+
+        		    		section.getLength()+" pages,"
+        		    		+" (" + (vpn-section.getFirstVPN()) + " page)\n");
+    		    	pageTable[vpn].readOnly=section.isReadOnly();
+    		    	if(pageTable[vpn].readOnly)
+    		    		Lib.debug(dbgVM,"\tReadOnly coff file\n");
+    		    	section.loadPage(vpn-section.getFirstVPN(), ppn);
+    		    	break;
+    		    }
+    		}
+    	}
+		//update the inverted table
+		//need multiple lock here
+		VMKernel.IPTable[ppn].currProcess = this;
+		VMKernel.IPTable[ppn].vpn = vpn;
+		
+	}
+	
 	
 	public void recordSPN(int vpn, int spn){
 		swapPos[vpn] = spn;
@@ -195,22 +243,19 @@ public class VMProcess extends UserProcess {
 	
 	
 	/**DOES this method needs to return something?*/
-	private void handleTLBMiss(int vaddress){
+	private void handleTLBMisss(int vaddress){
 		VMKernel.memoryLock.acquire();
 		
 		int vpn = Processor.pageFromAddress(vaddress);
-		
-		//need to check if vpn is out of bound
+		//check if vpn is out of bound
 		if(vpn > pageTable.length || vpn < 0){
 			Lib.debug(dbgProcess, "illegal memory access");
 		}
-		
 		//get the page table entry from VPN
 		TranslationEntry ptEntry = pageTable[vpn];
 
 		//Get the size of TLB
 		int TLBSize = Machine.processor().getTLBSize();
-		
 		//Allocate a new TLB entry
 		TranslationEntry entry = null;
 
@@ -229,38 +274,39 @@ public class VMProcess extends UserProcess {
 			}
 
 		}
-		
 		//if all the entry is valid, then randomly replace the entry;
 		if(index == -1){
-			// ALSO need to sync victim's page table entry
 			index = Lib.random(TLBSize);
 			entry = Machine.processor().readTLBEntry(index);
 		}
 		
-		// need to sync the TLB entry with the PTE
+		//need to sync the TLB entry with the PTE
 		if(ptEntry.valid){
+			
 			//update the index entry.vpn in pageTable according to the used and dirty bits of the entry
 			updatePageTableEntry(entry.vpn, entry);
 			
 			Machine.processor().writeTLBEntry(index,ptEntry);
 		}
-		
 		//need to handle the case: ptEntry is invalid;
 		else{
 			//need to handle it in the VMKernel
-			//the pageFaultHandler need to read the data from the swap file and then update 
-			//the TLB
+			//the pageFaultHandler need to read the data from the swap file and also need to update the 
+			//ptEntry.vpn and set the entry to valid
 			int ppn = pageFaultHandler(ptEntry.vpn);
 			if(ppn == -1){
 				Lib.debug(dbgVM, "error occurs");
 			}
-		
+			//the entry at the index vpn in page table has been updated. We can then write it to the TLB
+			Machine.processor().writeTLBEntry(index, pageTable[vpn]);
 		}
+	
 		VMKernel.memoryLock.release();
 	}
 
 
 	private void updatePageTableEntry(int vpn, TranslationEntry entry) {
+		
 		TranslationEntry toUpdate = pageTable[vpn];
 		toUpdate.dirty = entry.dirty;
 		toUpdate.used = entry.used;
@@ -296,7 +342,7 @@ public class VMProcess extends UserProcess {
 		switch (cause) {
 		case Processor.exceptionTLBMiss:
 			int vaddress = Machine.processor().readRegister(Processor.regBadVAddr);
-			handleTLBMiss(vaddress);//handle the TLB miss
+			handleTLBMisss(vaddress);//handle the TLB miss
 			break;
 		default:
 			super.handleException(cause);
@@ -308,8 +354,6 @@ public class VMProcess extends UserProcess {
 
 	//protected Lock memoryLock;
 	public static int swapPos[];
-	
-	private int numCoffPages = 0;
 	
 	private static final char dbgProcess = 'a';
 
