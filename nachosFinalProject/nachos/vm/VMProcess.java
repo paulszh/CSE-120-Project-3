@@ -106,7 +106,7 @@ public class VMProcess extends UserProcess {
 	//VMkernel.memoryLock.acquire();
 
 	if (UserKernel.freePages.size() < numPages) {
-	    UserKernel.memoryLock.release();
+	    //UserKernel.memoryLock.release();
 	    coff.close();
 	    Lib.debug(dbgProcess, "\tinsufficient physical memory");
 	    return false;
@@ -121,7 +121,6 @@ public class VMProcess extends UserProcess {
 	    //initialize all the entry inside swapPos to -1 which indicates no entry has been written to the swap file 
 	    swapPos[i] = -1;
 	}
-	
 	
 	//VMkernel.memoryLock.release();
 		return true;
@@ -153,12 +152,13 @@ public class VMProcess extends UserProcess {
 	*or we need to replace one entry in the inverted page table(indexed by ppn). The method will return a ppn. 
 	*/
 	private int pageFaultHandler(int vpn){
+		
+		System.out.println("page Fault Handler");
 		//must ensure that PTE is invalid
 		Lib.assertTrue(!pageTable[vpn].valid);
 	
 		int ppn;
 		//FIXME need a lock here
-	
 		//Case: freepageList is not empty
 		if(!VMKernel.freePages.isEmpty()){
 			//allocate one from list
@@ -201,9 +201,11 @@ public class VMProcess extends UserProcess {
 	}
 	
 	//only one page at a time
+	//FIXME need to modify
 	private void loadFromCoffFile(int vpn,int ppn){
+		System.out.println("read from the coff area");
+		int coffLength= numPages- stackPages - 1;
 		
-		int coffLength=numPages-9;
 		if(vpn<coffLength)
     	{
     		for (int s=0; s<coff.getNumSections(); s++) {
@@ -211,14 +213,10 @@ public class VMProcess extends UserProcess {
     		    
     		    if (vpn-section.getFirstVPN()<section.getLength())
     		    {
-    		    	Lib.debug(dbgVM, "\tinitializing vpn: " + vpn +
-        		    		", ppn: " + ppn
-        			      + "; section "+ section.getName()+" has "+
-        		    		section.getLength()+" pages,"
-        		    		+" (" + (vpn-section.getFirstVPN()) + " page)\n");
+    		    	
     		    	pageTable[vpn].readOnly=section.isReadOnly();
     		    	if(pageTable[vpn].readOnly)
-    		    		Lib.debug(dbgVM,"\tReadOnly coff file\n");
+    		    		Lib.debug(dbgVM,"\tReadOnly");
     		    	section.loadPage(vpn-section.getFirstVPN(), ppn);
     		    	break;
     		    }
@@ -244,8 +242,8 @@ public class VMProcess extends UserProcess {
 	
 	/**DOES this method needs to return something?*/
 	private void handleTLBMisss(int vaddress){
-		VMKernel.memoryLock.acquire();
-		
+	
+		System.out.println("TLB miss");
 		int vpn = Processor.pageFromAddress(vaddress);
 		//check if vpn is out of bound
 		if(vpn > pageTable.length || vpn < 0){
@@ -294,14 +292,14 @@ public class VMProcess extends UserProcess {
 			//the pageFaultHandler need to read the data from the swap file and also need to update the 
 			//ptEntry.vpn and set the entry to valid
 			int ppn = pageFaultHandler(ptEntry.vpn);
+			
 			if(ppn == -1){
 				Lib.debug(dbgVM, "error occurs");
 			}
 			//the entry at the index vpn in page table has been updated. We can then write it to the TLB
 			Machine.processor().writeTLBEntry(index, pageTable[vpn]);
 		}
-	
-		VMKernel.memoryLock.release();
+
 	}
 
 

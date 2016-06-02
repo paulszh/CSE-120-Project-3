@@ -15,7 +15,7 @@ public class VMKernel extends UserKernel {
 	 */
 	public VMKernel() {
 		super();
-		memoryLock = new Lock();
+		
 	}
 	/**
 	 * Initialize this kernel.
@@ -30,7 +30,9 @@ public class VMKernel extends UserKernel {
 		//initialize the clockHand to 0
 		clockHand = 0;
 		//FIXME have to increase the count correctly.
-		
+		for(int i = 0; i < Machine.processor().getNumPhysPages(); i++){
+			IPTable[i] = new IPTEntry();
+		}
 	}
 
 	/**
@@ -169,10 +171,11 @@ public class VMKernel extends UserKernel {
 //		}
 		//there must be a unpinned page, loop through the IPTable and find it
 		while(true){
-			idx = (clockHandIdx+1)% numPhysPages; 
+			
 			//if we find the unpinned page, we can break the loop
 			if(!IPTable[idx].pin)
 				break;
+			idx = (idx+1)% numPhysPages; 
 		}
 //		allPinnedLock.release();
 		return idx;
@@ -196,9 +199,8 @@ public class VMKernel extends UserKernel {
 			//else,need to check if the entry is dirty; If it is, swapped it out
 			else{
 				if(entry.dirty){
-				//FIXME, NEED TO CHECK if swapped out with no error
+					//FIXME, NEED TO CHECK if swapped out with no error
 					int spn = swapOut(vpn, ownerProcess);
-				
 					//this entry has been swapped out, so we have to set it to be invalid
 					ownerProcess.recordSPN(vpn,spn);
 					//the entry has been swapped out, need to set to invalid
@@ -224,6 +226,11 @@ public class VMKernel extends UserKernel {
 		public int vpn = -1;
 		public boolean pin = false;
 		//public TranslationEntry entry = null
+		public IPTEntry(){
+			vpn = -1;
+			pin = false;
+			currProcess = null;
+		}
 		
 		public IPTEntry(VMProcess process, int vpn, boolean pinned){
 			this.vpn = vpn;
@@ -236,8 +243,7 @@ public class VMKernel extends UserKernel {
 	
 	
 	//inverted page table
-	public static IPTEntry [] IPTable;
-	
+	public static IPTEntry [] IPTable = new IPTEntry[Machine.processor().getNumPhysPages()];
 	public static OpenFile File;
 	public static int clockHand;
 	public static int pinnedCount = 0;
