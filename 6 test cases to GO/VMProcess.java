@@ -21,10 +21,14 @@ public class VMProcess extends UserProcess {
 	 * Called by <tt>UThread.saveState()</tt>.
 	 */
 	public void saveState() {
+		//save state
+		//System.out.println("switch");
 		syncTLBEntry();
 	}
 
 
+	
+	//flush the TLB before context switching
 	public void syncTLBEntry(){
 
 		for(int i = 0; i < Machine.processor().getTLBSize(); i++){
@@ -32,15 +36,20 @@ public class VMProcess extends UserProcess {
 			TranslationEntry entry = Machine.processor().readTLBEntry(i);
 
 			if(entry.valid){
-
-				pageTable[entry.vpn].dirty = entry.dirty;
-
-				pageTable[entry.vpn].used = entry.used;
+				
+				
+				if(entry.dirty){
+					pageTable[entry.vpn].dirty = true;
+				}
+				
+				if(entry.used){
+					pageTable[entry.vpn].used = true;
+				}
 			}
 
 
 			entry.valid = false;
-			Machine.processor().writeTLBEntry(i, entry);
+			Machine.processor().writeTLBEntry(i, entry);	
 		}
 	}
 
@@ -53,7 +62,7 @@ public class VMProcess extends UserProcess {
 	}
 
 	/**
-	 *
+	 * 
 	 * @return
 	 */
 	public int readVirtualMemory(){
@@ -65,15 +74,13 @@ public class VMProcess extends UserProcess {
 	/**
 	 * Initializes page tables for this process so that the executable can be
 	 * demand-paged.
-	 *
+	 * 
 	 * @return <tt>true</tt> if successful.
 	 */
 	protected boolean loadSections() {
-		//System.out.println(numPages);
+		//System.out.println("number of physical pages is" + numPages);
 		//CREATE A PAGE TABLE ALL THE ENTRY IS FALSE
-		//VMkernel.memoryLock.acquire();
 
-		//UserKernel.memoryLock.release();
 
 		pageTable = new TranslationEntry[numPages];
 		swapPos = new int[numPages];
@@ -81,11 +88,10 @@ public class VMProcess extends UserProcess {
 		for (int i=0; i<numPages; i++) {
 			pageTable[i] = new TranslationEntry(i, -1,
 					false, false, false, false);
-			//initialize all the entry inside swapPos to -1 which indicates no entry has been written to the swap file
+			//initialize all the entry inside swapPos to -1 which indicates no entry has been written to the swap file 
 			swapPos[i] = -1;
 		}
 
-		//VMkernel.memoryLock.release();
 		return true;
 	}
 
@@ -94,6 +100,7 @@ public class VMProcess extends UserProcess {
 	 */
 	protected void unloadSections() {
 		super.unloadSections();
+		System.out.println("unload");
 	}
 
 
@@ -112,12 +119,14 @@ public class VMProcess extends UserProcess {
 
 
 	/**the current index(vpn) entry is invalid, so we need to allocate a new ppn to it if there is still physical memory available
-	 *or we need to replace one entry in the inverted page table(indexed by ppn). The method will return a ppn.
+	 *or we need to replace one entry in the inverted page table(indexed by ppn). The method will return a ppn. 
 	 */
 	private int pageFaultHandler(int vpn){
 
 		//System.out.println("page Fault Handler");
 		//must ensure that PTE is invalid
+		
+		VMKernel.pageFaultLock.acquire();
 		Lib.assertTrue(!pageTable[vpn].valid);
 
 		int ppn;
@@ -125,7 +134,9 @@ public class VMProcess extends UserProcess {
 		//Case: freepageList is not empty
 		if(!VMKernel.freePages.isEmpty()){
 			//allocate one from list
+			UserKernel.memoryLock.acquire();
 			ppn = ((Integer)VMKernel.freePages.removeFirst()).intValue();
+			UserKernel.memoryLock.release();;
 
 		}
 		else{
@@ -133,14 +144,12 @@ public class VMProcess extends UserProcess {
 			//sync TLB entries before evicting
 			updatePageTable();
 			//select a victim for replacement and swap out a page
-			//FIXME NEED A LOCK HERE
+			//FIXME NEED A LOCK HERE 
 			ppn = VMKernel.selectReplacementEntry();
-			//System.out.println("[pageFaultHandler] successfully selected replacement");
 			//need to update TLB immediately. since some entry in pageTable might have changed
 			updateTLB();
-			//System.out.println("[pageFaultHandler] successfully update TLB");
+			
 		}
-		//System.out.println("After freePages has been checked");
 
 		//map the old invalid entry to the new ppn
 		pageTable[vpn].ppn = ppn;
@@ -152,7 +161,7 @@ public class VMProcess extends UserProcess {
 		pageTable[vpn].dirty = true;
 
 		//pick the source to read the data in
-		if( swapPos[vpn] != -1){
+		if( swapPos[vpn] != -1){	
 			//System.out.println("read the data from the swap file");
 			//then swap in from the disk , need to map ppn with vpn in the inverted page table
 			VMKernel.swapIn(ppn, vpn, this);
@@ -162,6 +171,7 @@ public class VMProcess extends UserProcess {
 				//System.out.println("loading From Coff file");
 			loadFromCoffFile(vpn,ppn);
 		}
+		VMKernel.pageFaultLock.release();
 
 
 		//System.out.println("before returning PPN");
@@ -169,6 +179,113 @@ public class VMProcess extends UserProcess {
 
 
 	}
+
+/*===================================================================================================*/
+
+
+
+@Override
+public int readVirtualMemory(int vaddr, byte[] data, int offset,
+             int length) {
+    Lib.assertTrue(offset >= 0 && length >= 0 && offset+length <= data.length);
+
+    byte[] memory = Machine.processor().getMemory();
+
+    int amount = 0;
+
+    while (length > 0) {
+        //get the page number from virtual address
+        int vpn = Processor.pageFromAddress(vaddr);
+        int off = Processor.offsetFromAddress(vaddr);
+	int ppn;
+        int transfer = Math.min(length, pageSize-off);
+
+        // need to handle page fault here as well
+	if(!pageTable[vpn].valid){
+		ppn = pageFaultHandler(vpn);	
+		Lib.assertTrue(ppn != -1);
+	}
+
+	else{
+        	ppn = pinVirtualPage(vpn, false);
+	}
+
+        if (ppn == -1){
+	    System.out.println("The PPN is -1 in readVirtualMemory");
+            break;
+	}
+
+	VMKernel.pinPage(ppn);
+    System.arraycopy(memory, ppn*pageSize + off, data, offset,
+		     transfer);
+
+	VMKernel.unpinPage(ppn);
+	
+	VMKernel.allPinnedLock.acquire();
+        VMKernel.allPinned.wakeAll();
+	VMKernel.allPinnedLock.release();
+
+        vaddr += transfer;
+        offset += transfer;
+        amount += transfer;
+        length -= transfer;   
+         
+    }
+
+    return amount;
+}
+
+@Override
+public int writeVirtualMemory(int vaddr, byte[] data, int offset,
+              int length) {
+    Lib.assertTrue(offset >= 0 && length >= 0 && offset+length <= data.length);
+    
+    
+    //System.out.println("enter write virtual memory");
+    byte[] memory = Machine.processor().getMemory();
+
+    int amount = 0;
+
+    while (length > 0) {
+        int vpn = Processor.pageFromAddress(vaddr);
+        int off = Processor.offsetFromAddress(vaddr);
+	    int ppn;
+        int transfer = Math.min(length, pageSize-off);
+	
+	if(!pageTable[vpn].valid){
+
+		ppn = pageFaultHandler(vpn);	
+		Lib.assertTrue(ppn != -1);
+	}
+        else{
+		ppn = pinVirtualPage(vpn, true);
+	}
+
+        // Pin the physical pages
+        // handle page faults
+        // increment the num of pages pinned
+	VMKernel.pinPage(ppn);
+
+        System.arraycopy(data, offset, memory, ppn*pageSize + off, transfer);
+
+	VMKernel.unpinPage(ppn);
+	
+	VMKernel.allPinnedLock.acquire();
+        VMKernel.allPinned.wakeAll();
+	VMKernel.allPinnedLock.release();
+
+        vaddr += transfer;
+        offset += transfer;
+        amount += transfer;
+        length -= transfer;     
+
+    }
+    //System.out.println("exit write virtual memory");
+    return amount;
+}
+
+/*===================================================================================================*/
+	
 
 	//only one page at a time
 	//FIXME need to modify
@@ -192,10 +309,20 @@ public class VMProcess extends UserProcess {
 				}
 			}
 		}
+		else{	
+
+			//System.out.println("ppn" + ppn);
+			byte[] buff = new byte[pageSize];
+			byte[] memory = Machine.processor().getMemory();
+			System.arraycopy(buff, 0, memory, ppn * pageSize, pageSize);
+		}
 		//update the inverted table
 		//need multiple lock here
+		VMKernel.IPTLock.acquire();
 		VMKernel.IPTable[ppn].currProcess = this;
 		VMKernel.IPTable[ppn].vpn = vpn;
+		VMKernel.IPTLock.release();
+		//System.out.println("NOT HUNTING IN COFFSETION");
 
 	}
 
@@ -207,8 +334,6 @@ public class VMProcess extends UserProcess {
 	public int readSwapPos(int vpn){
 		return swapPos[vpn];
 	}
-
-
 
 	/**DOES this method needs to return something?*/
 	private void handleTLBMisss(int vaddress){
@@ -236,7 +361,7 @@ public class VMProcess extends UserProcess {
 			if(!entry.valid){
 				//the entry is invalid, can be replaced directly
 				//FIXME: does it need to be set to valid?
-				//FIXME: if the entry is invalid, do we need to sync it with the page table?
+				//FIXME: if the entry is invalid, do we need to sync it with the page table? 
 				index = i;
 				break;
 			}
@@ -259,13 +384,11 @@ public class VMProcess extends UserProcess {
 		//need to handle the case: ptEntry is invalid;
 		else{
 			//need to handle it in the VMKernel
-			//the pageFaultHandler need to read the data from the swap file and also need to update the
+			//the pageFaultHandler need to read the data from the swap file and also need to update the 
 			//ptEntry.vpn and set the entry to valid
+			
 			int ppn = pageFaultHandler(ptEntry.vpn);
-
-			if(ppn == -1){
-				Lib.debug(dbgVM, "error occurs");
-			}
+			Lib.assertTrue(ppn != -1);
 			//the entry at the index vpn in page table has been updated. We can then write it to the TLB
 			Machine.processor().writeTLBEntry(index, pageTable[vpn]);
 		}
@@ -277,8 +400,12 @@ public class VMProcess extends UserProcess {
 
 		TranslationEntry toUpdate = pageTable[vpn];
 		//	System.out.println("[In updatePageTable with params] vpn at table " + vpn);
-		toUpdate.dirty = entry.dirty;
-		toUpdate.used = entry.used;
+		if(entry.dirty){
+			toUpdate.dirty = entry.dirty;
+		}
+		if(entry.used){
+			toUpdate.used = entry.used;
+		}
 
 	}
 
@@ -291,7 +418,6 @@ public class VMProcess extends UserProcess {
 				updatePageTableEntry(toUpdate.vpn,toUpdate);
 			}
 		}
-		//	System.out.println("updatePageTable() returns");
 	}
 
 	//get the PTE by VPN
@@ -303,7 +429,7 @@ public class VMProcess extends UserProcess {
 	 * Handle a user exception. Called by <tt>UserKernel.exceptionHandler()</tt>
 	 * . The <i>cause</i> argument identifies which exception occurred; see the
 	 * <tt>Processor.exceptionZZZ</tt> constants.
-	 *
+	 * 
 	 * @param cause the user exception that occurred.
 	 */
 	public void handleException(int cause) {
@@ -312,9 +438,13 @@ public class VMProcess extends UserProcess {
 		switch (cause) {
 			case Processor.exceptionTLBMiss:
 				int vaddress = Machine.processor().readRegister(Processor.regBadVAddr);
+				//System.out.println(vaddress);
 				handleTLBMisss(vaddress);//handle the TLB miss
+				//System.out.println("Successfully handle TLB misses");
 				break;
 			default:
+				//System.out.println("something is wrong");
+				//System.out.println("the cause of the problem" + cause);
 				super.handleException(cause);
 				break;
 		}
