@@ -6,20 +6,20 @@ import nachos.userprog.*;
 import nachos.vm.*;
 
 /**
- * A <tt>UserProcess</tt> that supports demand-paging.
- */
+* A <tt>UserProcess</tt> that supports demand-paging.
+*/
 public class VMProcess extends UserProcess {
 	/**
-	 * Allocate a new process.
-	 */
+	* Allocate a new process.
+	*/
 	public VMProcess() {
 		super();
 	}
 
 	/**
-	 * Save the state of this process in preparation for a context switch.
-	 * Called by <tt>UThread.saveState()</tt>.
-	 */
+	* Save the state of this process in preparation for a context switch.
+	* Called by <tt>UThread.saveState()</tt>.
+	*/
 	public void saveState() {
 		syncTLBEntry();
 	}
@@ -36,6 +36,8 @@ public class VMProcess extends UserProcess {
 				pageTable[entry.vpn].dirty = entry.dirty;
 
 				pageTable[entry.vpn].used = entry.used;
+
+				pageTable[entry.vpn].readOnly = entry.readOnly;
 			}
 
 
@@ -45,17 +47,17 @@ public class VMProcess extends UserProcess {
 	}
 
 	/**
-	 * Restore the state of this process after a context switch. Called by
-	 * <tt>UThread.restoreState()</tt>.
-	 */
+	* Restore the state of this process after a context switch. Called by
+	* <tt>UThread.restoreState()</tt>.
+	*/
 	public void restoreState() {
 		//super.restoreState();
 	}
 
 	/**
-	 *
-	 * @return
-	 */
+	*
+	* @return
+	*/
 	public int readVirtualMemory(){
 		return 0;
 	}
@@ -63,11 +65,11 @@ public class VMProcess extends UserProcess {
 
 
 	/**
-	 * Initializes page tables for this process so that the executable can be
-	 * demand-paged.
-	 *
-	 * @return <tt>true</tt> if successful.
-	 */
+	* Initializes page tables for this process so that the executable can be
+	* demand-paged.
+	*
+	* @return <tt>true</tt> if successful.
+	*/
 	protected boolean loadSections() {
 		//System.out.println(numPages);
 		//CREATE A PAGE TABLE ALL THE ENTRY IS FALSE
@@ -80,7 +82,7 @@ public class VMProcess extends UserProcess {
 
 		for (int i=0; i<numPages; i++) {
 			pageTable[i] = new TranslationEntry(i, -1,
-					false, false, false, false);
+			false, false, false, false);
 			//initialize all the entry inside swapPos to -1 which indicates no entry has been written to the swap file
 			swapPos[i] = -1;
 		}
@@ -90,14 +92,15 @@ public class VMProcess extends UserProcess {
 	}
 
 	/**
-	 * Release any resources allocated by <tt>loadSections()</tt>.
-	 */
+	* Release any resources allocated by <tt>loadSections()</tt>.
+	*/
 	protected void unloadSections() {
 		super.unloadSections();
 	}
 
 
 	private void updateTLB(){
+
 		TranslationEntry entry;
 		for (int i=0;i<Machine.processor().getTLBSize();i++)
 		{
@@ -107,17 +110,71 @@ public class VMProcess extends UserProcess {
 				Machine.processor().writeTLBEntry(i, pageTable[entry.vpn]);
 			}
 		}
+
 	}
 
+	@Override
+	protected int pinVirtualPage(int vpn, boolean isUserWrite) {
+		//System.out.println("pinVirtualPage is called");
+		int ppn;
+		//need to handlePageFault
+		if(!pageTable[vpn].valid){
+			ppn = pageFaultHandler(vpn);
+			Lib.assertTrue(ppn != -1);
+		}
+		else{
+			if (vpn < 0 || vpn >= pageTable.length){
+				return -1;
+			}
 
+			TranslationEntry entry = pageTable[vpn];
+
+			if (!entry.valid || entry.vpn != vpn){
+				return -1;
+			}
+
+			if (isUserWrite) {
+				if (entry.readOnly){
+					return -1;
+				}
+				entry.dirty = true;
+
+			}
+			entry.used = true;
+			ppn = entry.ppn;
+		}
+		Lib.assertTrue(ppn < VMKernel.IPTable.length);
+		//next need to actually pin the page pysical page
+		VMKernel.pinPage(ppn);
+		for (int i=0;i<Machine.processor().getTLBSize();i++)
+		{
+			entry = Machine.processor().readTLBEntry(i);
+			if(entry.valid)
+			{
+				toCompare = pageTable[entry.vpn]);
+			}
+		}
+
+		return ppn;
+	}
+
+	@Override
+	protected void unpinVirtualPage(int ppn){
+		//System.out.println("unpinVirtualPage is called");
+		VMKernel.unpinPage(ppn);
+		VMKernel.allPinnedLock.acquire();
+        VMKernel.allPinned.wakeAll();
+		VMKernel.allPinnedLock.release();
+	}
 
 	/**the current index(vpn) entry is invalid, so we need to allocate a new ppn to it if there is still physical memory available
-	 *or we need to replace one entry in the inverted page table(indexed by ppn). The method will return a ppn.
-	 */
+	*or we need to replace one entry in the inverted page table(indexed by ppn). The method will return a ppn.
+	*/
 	private int pageFaultHandler(int vpn){
 
 		//System.out.println("page Fault Handler");
 		//must ensure that PTE is invalid
+		VMKernel.pageFaultLock.acquire();
 		Lib.assertTrue(!pageTable[vpn].valid);
 
 		int ppn;
@@ -125,22 +182,20 @@ public class VMProcess extends UserProcess {
 		//Case: freepageList is not empty
 		if(!VMKernel.freePages.isEmpty()){
 			//allocate one from list
+			UserKernel.memoryLock.acquire();
 			ppn = ((Integer)VMKernel.freePages.removeFirst()).intValue();
+			UserKernel.memoryLock.release();
 
 		}
 		else{
-			//System.out.println("Updating the page table when freepages is not empty");
 			//sync TLB entries before evicting
 			updatePageTable();
 			//select a victim for replacement and swap out a page
 			//FIXME NEED A LOCK HERE
 			ppn = VMKernel.selectReplacementEntry();
-			//System.out.println("[pageFaultHandler] successfully selected replacement");
 			//need to update TLB immediately. since some entry in pageTable might have changed
 			updateTLB();
-			//System.out.println("[pageFaultHandler] successfully update TLB");
 		}
-		//System.out.println("After freePages has been checked");
 
 		//map the old invalid entry to the new ppn
 		pageTable[vpn].ppn = ppn;
@@ -159,11 +214,12 @@ public class VMProcess extends UserProcess {
 		}
 		//The data we need is in the coff file, load on demand(load one page everytime)
 		else{
-				//System.out.println("loading From Coff file");
+			//System.out.println("loading From Coff file");
 			loadFromCoffFile(vpn,ppn);
 		}
 
 
+		VMKernel.pageFaultLock.release();
 		//System.out.println("before returning PPN");
 		return ppn;
 
@@ -185,17 +241,32 @@ public class VMProcess extends UserProcess {
 				{
 
 					pageTable[vpn].readOnly=section.isReadOnly();
-					if(pageTable[vpn].readOnly)
-						Lib.debug(dbgVM,"\tReadOnly");
+
+					Lib.debug(dbgVM, "\tinitializing vpn: " + vpn +
+						", ppn: " + ppn
+					  + "; section "+ section.getName()+" has "+
+						section.getLength()+" pages,"
+						+" (" + (vpn-section.getFirstVPN()) + " page)\n");
+
+					//if(pageTable[vpn].readOnly)
+					//Lib.debug(dbgVM,"\tReadOnly");
 					section.loadPage(vpn-section.getFirstVPN(), ppn);
 					break;
 				}
 			}
 		}
+		else{
+			byte[] buff = new byte[pageSize];
+			byte[] memory = Machine.processor().getMemory();
+			System.arraycopy(buff, 0, memory, ppn * pageSize, pageSize);
+
+		}
 		//update the inverted table
 		//need multiple lock here
+		VMKernel.IPTLock.acquire();
 		VMKernel.IPTable[ppn].currProcess = this;
 		VMKernel.IPTable[ppn].vpn = vpn;
+		VMKernel.IPTLock.release();
 
 	}
 
@@ -212,6 +283,8 @@ public class VMProcess extends UserProcess {
 
 	/**DOES this method needs to return something?*/
 	private void handleTLBMisss(int vaddress){
+
+
 
 		//	System.out.println("TLB miss");
 		int vpn = Processor.pageFromAddress(vaddress);
@@ -300,23 +373,23 @@ public class VMProcess extends UserProcess {
 	}
 
 	/**
-	 * Handle a user exception. Called by <tt>UserKernel.exceptionHandler()</tt>
-	 * . The <i>cause</i> argument identifies which exception occurred; see the
-	 * <tt>Processor.exceptionZZZ</tt> constants.
-	 *
-	 * @param cause the user exception that occurred.
-	 */
+	* Handle a user exception. Called by <tt>UserKernel.exceptionHandler()</tt>
+	* . The <i>cause</i> argument identifies which exception occurred; see the
+	* <tt>Processor.exceptionZZZ</tt> constants.
+	*
+	* @param cause the user exception that occurred.
+	*/
 	public void handleException(int cause) {
 		Processor processor = Machine.processor();
 
 		switch (cause) {
 			case Processor.exceptionTLBMiss:
-				int vaddress = Machine.processor().readRegister(Processor.regBadVAddr);
-				handleTLBMisss(vaddress);//handle the TLB miss
-				break;
+			int vaddress = Machine.processor().readRegister(Processor.regBadVAddr);
+			handleTLBMisss(vaddress);//handle the TLB miss
+			break;
 			default:
-				super.handleException(cause);
-				break;
+			super.handleException(cause);
+			break;
 		}
 	}
 

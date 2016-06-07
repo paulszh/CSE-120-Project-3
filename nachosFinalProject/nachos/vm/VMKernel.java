@@ -27,10 +27,18 @@ public class VMKernel extends UserKernel {
 		//System.out.println("initialize break point 1 ");
 		pageFaultLock = new Lock();
 		allPinnedLock = new Lock();
+		pinLock = new Lock();
+		countLock = new Lock();
+		swapLock = new Lock();
+		swapOutLock = new Lock();
+		swapInLock = new Lock();
+		IPTLock = new Lock();
 		allPinned = new Condition(allPinnedLock);
 
 		//initialize the clockHand to 0
 		clockHand = 0;
+		pinnedCount = 0;
+		swapFileSize = 0;
 		//FIXME have to increase the count correctly.
 		//System.out.println("initialize break point 2 ");
 		for(int i = 0; i < Machine.processor().getNumPhysPages(); i++){
@@ -74,8 +82,8 @@ public class VMKernel extends UserKernel {
 	 */
 	public static int swapOut(int vpn, VMProcess process){
 		//swap file page number
+		swapOutLock.acquire();
 		int spn;
-
 		//first, create a empty buffer with the size equals to the page size
 		byte[] buffer = new byte[pageSize];
 		int vaddr = Processor.makeAddress(vpn, 0);
@@ -84,18 +92,18 @@ public class VMKernel extends UserKernel {
 		if(byteRead != pageSize){
 			Lib.debug(dbgVM, "readVirtualMemory failed");
 		}
-		//FIXME get a free swap Pages
 		spn = getFreeSwapPages();
 		//set the value of the current file pointer
 		File.seek(spn*pageSize);
 		//write the data in the buffer to the swap file
+		//FIXME
 		int byteWritten = File.write(buffer, 0, pageSize);
 
 		//handle the error
 		if(byteWritten != pageSize){
 			Lib.debug(dbgVM, "write to swapfile failed");
 		}
-
+		swapOutLock.release();
 		return spn;
 	}
 
@@ -103,6 +111,7 @@ public class VMKernel extends UserKernel {
 	public static void swapIn(int ppn, int vpn, VMProcess process){
 
 		//FIXME: NEED A LOCK HERE
+		swapInLock.acquire();
 		//First, create a empty buffer with the size equals to the page size
 		byte[] buffer = new byte[pageSize];
 
@@ -131,8 +140,11 @@ public class VMKernel extends UserKernel {
 
 		//update the Inverted page table. This time, link the ppn with the vpn
 		//FIXME: NEED A LOCK HERE
+		IPTLock.acquire();
 		IPTable[ppn].vpn = vpn;
 		IPTable[ppn].currProcess = process;
+		IPTLock.release();
+		swapInLock.release();
 	}
 
 	/**get a free position in the swap file(freeswapPages),
@@ -141,6 +153,7 @@ public class VMKernel extends UserKernel {
 	 */
 	public static int getFreeSwapPages(){
 		//FIXME: need a lock here?
+		swapLock.acquire();
 		int spn;
 		//if the freeswapPages is not empty;
 		if(freeswapPages.size() > 0){
@@ -150,12 +163,15 @@ public class VMKernel extends UserKernel {
 			//need to allocate new space in swapfile
 			spn = swapFileSize++;
 		}
+		swapLock.release();
 		return spn;
 	}
 
 	public static void freeSwapPage(int spn){
 		//need a lock here
+		swapLock.acquire();
 		freeswapPages.add(spn);
+		swapLock.release();
 	}
 
 
@@ -169,11 +185,11 @@ public class VMKernel extends UserKernel {
 
 		int idx = (clockHandIdx+1)% numPhysPages;
 
-//		allPinnedLock.acquire();
-//		//if pinnedCount equals to the number of phyiscal pages, then all the physical pages are pinned
-//		if(pinnedCount == numPhysPages){
-//			allPinned.sleep();
-//		}
+		allPinnedLock.acquire();
+		//if pinnedCount equals to the number of phyiscal pages, then all the physical pages are pinned
+		if(pinnedCount == numPhysPages){
+			allPinned.sleep();
+		}
 		//there must be a unpinned page, loop through the IPTable and find it
 		while(true){
 
@@ -182,7 +198,7 @@ public class VMKernel extends UserKernel {
 				break;
 			idx = (idx+1)% numPhysPages;
 		}
-//		allPinnedLock.release();
+		allPinnedLock.release();
 		return idx;
 
 	}
@@ -196,6 +212,9 @@ public class VMKernel extends UserKernel {
 			clockHand = sleepIfAllPinned(clockHand);
 			VMProcess ownerProcess = IPTable[clockHand].currProcess;
 			int vpn = IPTable[clockHand].vpn;
+
+			Lib.assertTrue(ownerProcess != null);
+			Lib.assertTrue(vpn >= 0);
 			TranslationEntry entry = ownerProcess.getPTE(vpn);
 			//if recently used, then continue
 			if(entry.used){
@@ -223,6 +242,38 @@ public class VMKernel extends UserKernel {
 		return clockHand;
 	}
 
+	//pin the physical page, put a pinLock here;
+	public static void pinPage(int ppn){
+		//FIXME NEED A LOCK HERE
+		pinLock.acquire();
+		IPTable[ppn].pin = true;
+		increasePinCount(true);
+		pinLock.release();
+
+	}
+
+	//unpin the physical page, put a pinLock here;
+	public static void unpinPage(int ppn){
+		pinLock.acquire();
+
+		IPTable[ppn].pin = false;
+		increasePinCount(false);
+
+		pinLock.release();
+	}
+
+	public static void increasePinCount(boolean increase){
+		//FIXME: need a unique lock here
+		countLock.acquire();
+		if(increase){
+			pinnedCount++;
+		}
+		else{
+			pinnedCount--;
+		}
+		countLock.release();
+	}
+
 
 
 	/**The Entry of IPTable, each entry includes the info about process, vpn and pinCount*/
@@ -245,19 +296,27 @@ public class VMKernel extends UserKernel {
 	}
 
 	public static Lock pageFaultLock;
-
+	public static Lock pinLock;
 
 	//inverted page table
 	public static IPTEntry [] IPTable = new IPTEntry[Machine.processor().getNumPhysPages()];
+	public static Lock IPTLock;
 	public static OpenFile File;
 	public static int clockHand;
+	//a lock to keep track fo the pinnedCount;
+	public static Lock swapOutLock;
+	public static Lock swapInLock;
+	public static Lock countLock;
 	public static int pinnedCount = 0;
-	public static int swapFileSize = 0;
+	//allPinnedLock is associated with the conditional varibale allPinned;
 	public static Lock allPinnedLock;
 	public static Condition allPinned;
 	//record which places are available in the swap file
+
+	//swapFileSize and freeswapPages share a lock
+	public static Lock swapLock;
+	public static int swapFileSize = 0;
 	public static LinkedList<Integer> freeswapPages = new LinkedList();
-	//
 
 	private static final int pageSize = Processor.pageSize;
 

@@ -37,7 +37,7 @@ public class UserProcess {
 	for (int i=2; i<maxFiles; i++)
 	    fileTable[i] = null;
     }
-    
+
     /**
      * Allocate and return a new process of the correct class. The class name
      * is specified by the <tt>nachos.conf</tt> key
@@ -69,9 +69,9 @@ public class UserProcess {
     public boolean execute(String name, String[] args) {
 	if (!load(name, args))
 	    return false;
-	
+
 	UserKernel.numRunningProcesses++;
-	
+
 	new UThread(this).setName(name).fork();
 
 	return true;
@@ -152,11 +152,10 @@ public class UserProcess {
 	Lib.assertTrue(offset >= 0 && length >= 0 && offset+length <= data.length);
 
 	byte[] memory = Machine.processor().getMemory();
-	
+
 	int amount = 0;
 
 	while (length > 0) {
-		//get the page number from virtual address
 	    int vpn = Processor.pageFromAddress(vaddr);
 	    int off = Processor.offsetFromAddress(vaddr);
 
@@ -169,12 +168,12 @@ public class UserProcess {
 	    System.arraycopy(memory, ppn*pageSize + off, data, offset,
 			     transfer);
 
-	    unpinVirtualPage(vpn);
-	    
+	    unpinVirtualPage(ppn);
+
 	    vaddr += transfer;
 	    offset += transfer;
 	    amount += transfer;
-	    length -= transfer;	    
+	    length -= transfer;
 	}
 
 	return amount;
@@ -212,7 +211,7 @@ public class UserProcess {
 	Lib.assertTrue(offset >= 0 && length >= 0 && offset+length <= data.length);
 
 	byte[] memory = Machine.processor().getMemory();
-	
+
 	int amount = 0;
 
 	while (length > 0) {
@@ -227,13 +226,13 @@ public class UserProcess {
 
 	    System.arraycopy(data, offset, memory, ppn*pageSize + off,
 			     transfer);
-	    
-	    unpinVirtualPage(vpn);
-	    
+
+	    unpinVirtualPage(ppn);
+
 	    vaddr += transfer;
 	    offset += transfer;
 	    amount += transfer;
-	    length -= transfer;	    
+	    length -= transfer;
 	}
 
 	return amount;
@@ -256,8 +255,8 @@ public class UserProcess {
 
 	return entry.ppn;
     }
-    
-    protected void unpinVirtualPage(int vpn) {
+
+    protected void unpinVirtualPage(int ppn) {
     }
 
     /**
@@ -272,7 +271,7 @@ public class UserProcess {
      */
     private boolean load(String name, String[] args) {
 	Lib.debug(dbgProcess, "UserProcess.load(\"" + name + "\")");
-	
+
 	OpenFile executable = ThreadedKernel.fileSystem.open(name, false);
 	if (executable == null) {
 	    Lib.debug(dbgProcess, "\topen failed");
@@ -315,7 +314,7 @@ public class UserProcess {
 	}
 
 	// program counter initially points at the program entry point
-	initialPC = coff.getEntryPoint();	
+	initialPC = coff.getEntryPoint();
 
 	// next comes the stack; stack pointer initially points to top of it
 	numPages += stackPages;
@@ -333,7 +332,7 @@ public class UserProcess {
 
 	this.argc = args.length;
 	this.argv = entryOffset;
-	
+
 	for (int i=0; i<argv.length; i++) {
 	    byte[] stringOffsetBytes = Lib.bytesFromInt(stringOffset);
 	    Lib.assertTrue(writeVirtualMemory(entryOffset,stringOffsetBytes) == 4);
@@ -370,17 +369,17 @@ public class UserProcess {
 
 	for (int vpn=0; vpn<numPages; vpn++) {
 	    int ppn = ((Integer)UserKernel.freePages.removeFirst()).intValue();
-	    //True or false?
+
 	    pageTable[vpn] = new TranslationEntry(vpn, ppn,
 						  true, false, false, false);
 	}
-	
+
 	UserKernel.memoryLock.release();
 
 	// load sections
 	for (int s=0; s<coff.getNumSections(); s++) {
 	    CoffSection section = coff.getSection(s);
-	    
+
 	    Lib.debug(dbgProcess, "\tinitializing " + section.getName()
 		      + " section (" + section.getLength() + " pages)");
 
@@ -391,7 +390,7 @@ public class UserProcess {
 		section.loadPage(i, pinVirtualPage(vpn, false));
 	    }
 	}
-	
+
 	return true;
     }
 
@@ -401,7 +400,7 @@ public class UserProcess {
     protected void unloadSections() {
         for (int vpn=0; vpn<pageTable.length; vpn++)
 	    UserKernel.freePages.add(new Integer(pageTable[vpn].ppn));
-    }    
+    }
 
     /**
      * Initialize the processor's registers in preparation for running the
@@ -427,14 +426,14 @@ public class UserProcess {
     }
 
     /**
-     * Handle the halt() system call. 
+     * Handle the halt() system call.
      */
     private int handleHalt() {
 	if (processID != 0)
 	    return -1;
 
 	Machine.halt();
-	
+
 	Lib.assertNotReached("Machine.halt() did not halt machine!");
 	return 0;
     }
@@ -450,7 +449,7 @@ public class UserProcess {
 	UserKernel.memoryLock.release();
 
 	coff.close();
-	
+
 	UserKernel.processLock.acquire();
 
 	if (parentProcess != null) {
@@ -513,10 +512,10 @@ public class UserProcess {
 	Integer integerChildID = new Integer(childID);
 	Integer status;
 	int result;
-	
+
 	if (!childProcesses.contains(integerChildID))
 	    return -1;
-	
+
 	UserKernel.processLock.acquire();
 
 	while (!exitStatusTable.containsKey(integerChildID))
@@ -537,7 +536,7 @@ public class UserProcess {
 
 	return result;
     }
-    
+
     private int handleCreateOpen(int vaddrFileName, boolean create) {
 	String fileName = readVirtualMemoryString(vaddrFileName, 256);
 	if (fileName == null)
@@ -652,7 +651,7 @@ public class UserProcess {
 	    return -1;
 
 	return 0;
-    }    
+    }
 
     private static final int
         syscallHalt = 0,
@@ -686,7 +685,7 @@ public class UserProcess {
      * <tr><td>8</td><td><tt>int  close(int fd);</tt></td></tr>
      * <tr><td>9</td><td><tt>int  unlink(char *name);</tt></td></tr>
      * </table>
-     * 
+     *
      * @param	syscall	the syscall number.
      * @param	a0	the first syscall argument.
      * @param	a1	the second syscall argument.
@@ -755,8 +754,8 @@ public class UserProcess {
 				       );
 	    processor.writeRegister(Processor.regV0, result);
 	    processor.advancePC();
-	    break;				       
-				       
+	    break;
+
 	default:
 	    Lib.debug(dbgProcess, "Unexpected exception: " +
 		      Processor.exceptionNames[cause]);
@@ -770,30 +769,30 @@ public class UserProcess {
     protected Coff coff;
 
     /** This process's page table. */
-    public TranslationEntry[] pageTable;
+    protected TranslationEntry[] pageTable;
     /** The number of contiguous pages occupied by the program. */
     protected int numPages;
 
     /** The number of pages in the program's stack. */
     protected final int stackPages = 8;
-    
+
     private int initialPC, initialSP;
     private int argc, argv;
-    
+
     private UserProcess parentProcess = null;
     private int processID;
-    
+
     private HashSet childProcesses = new HashSet();
     private HashMap exitStatusTable = new HashMap();
     private Condition childFinished = new Condition(UserKernel.processLock);
     private boolean abnormalTermination = false;
-    
+
     private byte[] ioBuffer = new byte[ioBufferSize];
     private static final int ioBufferSize = 1024;
-    
+
     protected OpenFile[] fileTable = new OpenFile[maxFiles];
     protected static final int maxFiles = 16;
-	
+
     private static final int pageSize = Processor.pageSize;
     private static final char dbgProcess = 'a';
 }
