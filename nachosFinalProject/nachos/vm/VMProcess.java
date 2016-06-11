@@ -36,8 +36,6 @@ public class VMProcess extends UserProcess {
 				pageTable[entry.vpn].dirty = entry.dirty;
 
 				pageTable[entry.vpn].used = entry.used;
-
-				pageTable[entry.vpn].readOnly = entry.readOnly;
 			}
 
 
@@ -55,7 +53,6 @@ public class VMProcess extends UserProcess {
 	}
 
 	/**
-	*
 	* @return
 	*/
 	public int readVirtualMemory(){
@@ -73,9 +70,6 @@ public class VMProcess extends UserProcess {
 	protected boolean loadSections() {
 		//System.out.println(numPages);
 		//CREATE A PAGE TABLE ALL THE ENTRY IS FALSE
-		//VMkernel.memoryLock.acquire();
-
-		//UserKernel.memoryLock.release();
 
 		pageTable = new TranslationEntry[numPages];
 		swapPos = new int[numPages];
@@ -95,11 +89,38 @@ public class VMProcess extends UserProcess {
 	* Release any resources allocated by <tt>loadSections()</tt>.
 	*/
 	protected void unloadSections() {
-		super.unloadSections();
+		//super.unloadSections();
+		
+	
+		
+		for(int i = 0;i < numPages;i++){
+			
+			if(swapPos[i] != -1){
+				VMKernel.freeSwapPage(swapPos[i]);
+			}
+			
+			if(pageTable[i].valid){
+				VMKernel.IPTable[pageTable[i].ppn].reset();
+				
+				if(VMKernel.IPTable[pageTable[i].ppn].pin){
+					VMKernel.unpinPage(pageTable[i].ppn);
+				}
+				
+				VMKernel.memoryLock.acquire();
+				
+				VMKernel.freePages.add(new Integer(pageTable[i].ppn));
+				
+				VMKernel.memoryLock.acquire();
+				
+				pageTable[i].valid = false;
+			}
+		}
+		syncTLBEntry();
+
 	}
 
 
-	private void updateTLB(){
+	public void updateTLB(){
 
 		TranslationEntry entry;
 		for (int i=0;i<Machine.processor().getTLBSize();i++)
@@ -118,6 +139,10 @@ public class VMProcess extends UserProcess {
 		//System.out.println("pinVirtualPage is called");
 		int ppn;
 		//need to handlePageFault
+		if(vpn >= numPages){
+			System.out.println("number virutal pages" + numPages);
+			System.out.println("vpn is " + vpn);
+		}
 		if(!pageTable[vpn].valid){
 			ppn = pageFaultHandler(vpn);
 			Lib.assertTrue(ppn != -1);
@@ -146,15 +171,6 @@ public class VMProcess extends UserProcess {
 		Lib.assertTrue(ppn < VMKernel.IPTable.length);
 		//next need to actually pin the page pysical page
 		VMKernel.pinPage(ppn);
-		for (int i=0;i<Machine.processor().getTLBSize();i++)
-		{
-			entry = Machine.processor().readTLBEntry(i);
-			if(entry.valid)
-			{
-				toCompare = pageTable[entry.vpn]);
-			}
-		}
-
 		return ppn;
 	}
 
@@ -163,7 +179,7 @@ public class VMProcess extends UserProcess {
 		//System.out.println("unpinVirtualPage is called");
 		VMKernel.unpinPage(ppn);
 		VMKernel.allPinnedLock.acquire();
-        VMKernel.allPinned.wakeAll();
+        	VMKernel.allPinned.wakeAll();
 		VMKernel.allPinnedLock.release();
 	}
 
@@ -172,7 +188,6 @@ public class VMProcess extends UserProcess {
 	*/
 	private int pageFaultHandler(int vpn){
 
-		//System.out.println("page Fault Handler");
 		//must ensure that PTE is invalid
 		VMKernel.pageFaultLock.acquire();
 		Lib.assertTrue(!pageTable[vpn].valid);
@@ -188,36 +203,43 @@ public class VMProcess extends UserProcess {
 
 		}
 		else{
-			//sync TLB entries before evicting
 			updatePageTable();
 			//select a victim for replacement and swap out a page
 			//FIXME NEED A LOCK HERE
-			ppn = VMKernel.selectReplacementEntry();
+			ppn = VMKernel.selectReplacementEntry(this);
+			
+			Lib.assertTrue(ppn != -1);
 			//need to update TLB immediately. since some entry in pageTable might have changed
 			updateTLB();
 		}
-
-		//map the old invalid entry to the new ppn
-		pageTable[vpn].ppn = ppn;
-		//set the current entry to valid
-		pageTable[vpn].valid = true;
-		//mark as used
-		pageTable[vpn].used = true;
-		//set the dirty bit to true
-		pageTable[vpn].dirty = true;
-
-		//pick the source to read the data in
-		if( swapPos[vpn] != -1){
-			//System.out.println("read the data from the swap file");
-			//then swap in from the disk , need to map ppn with vpn in the inverted page table
-			VMKernel.swapIn(ppn, vpn, this);
-		}
-		//The data we need is in the coff file, load on demand(load one page everytime)
-		else{
+		
+		if( swapPos[vpn] == -1){
 			//System.out.println("loading From Coff file");
 			loadFromCoffFile(vpn,ppn);
+			
+		}
+		else{
+			//System.out.println("read the data from the swap file");
+			//then swap in from the disk , need to map ppn with vpn in the inverted page table
+			pageTable[vpn].ppn = ppn;
+			
+			//set the dirty bit to true
+			pageTable[vpn].valid = true;
+			VMKernel.swapIn(ppn, vpn, this);
+			pageTable[vpn].dirty = true;
 		}
 
+		//map the old invalid entry to the new ppn
+	
+		//set the current entry to valid
+		
+		//mark as used
+	
+		//pick the source to read the data in
+		
+		//The data we need is in the coff file, load on demand(load one page everytime)
+		pageTable[vpn].valid = true;
+		pageTable[vpn].used = true;
 
 		VMKernel.pageFaultLock.release();
 		//System.out.println("before returning PPN");
@@ -227,30 +249,21 @@ public class VMProcess extends UserProcess {
 	}
 
 	//only one page at a time
-	//FIXME need to modify
 	private void loadFromCoffFile(int vpn,int ppn){
 		//	System.out.println("read from the coff area");
-		int coffLength= numPages- stackPages - 1;
-
-		if(vpn<coffLength)
+		int length= numPages- stackPages - 1;
+		//VMKernel.pinPage(ppn);
+		if(vpn<length)
 		{
 			for (int s=0; s<coff.getNumSections(); s++) {
 				CoffSection section = coff.getSection(s);
 
-				if (vpn-section.getFirstVPN()<section.getLength())
+				int section_Num = vpn-section.getFirstVPN();
+				if (section_Num < section.getLength())
 				{
 
 					pageTable[vpn].readOnly=section.isReadOnly();
-
-					Lib.debug(dbgVM, "\tinitializing vpn: " + vpn +
-						", ppn: " + ppn
-					  + "; section "+ section.getName()+" has "+
-						section.getLength()+" pages,"
-						+" (" + (vpn-section.getFirstVPN()) + " page)\n");
-
-					//if(pageTable[vpn].readOnly)
-					//Lib.debug(dbgVM,"\tReadOnly");
-					section.loadPage(vpn-section.getFirstVPN(), ppn);
+					section.loadPage(section_Num, ppn);
 					break;
 				}
 			}
@@ -263,10 +276,12 @@ public class VMProcess extends UserProcess {
 		}
 		//update the inverted table
 		//need multiple lock here
+		pageTable[vpn].ppn = ppn;
 		VMKernel.IPTLock.acquire();
 		VMKernel.IPTable[ppn].currProcess = this;
 		VMKernel.IPTable[ppn].vpn = vpn;
 		VMKernel.IPTLock.release();
+		//VMKernel.unpinPage(ppn);
 
 	}
 
@@ -284,9 +299,6 @@ public class VMProcess extends UserProcess {
 	/**DOES this method needs to return something?*/
 	private void handleTLBMisss(int vaddress){
 
-
-
-		//	System.out.println("TLB miss");
 		int vpn = Processor.pageFromAddress(vaddress);
 		//check if vpn is out of bound
 		if(vpn > pageTable.length || vpn < 0){
@@ -295,21 +307,22 @@ public class VMProcess extends UserProcess {
 		//get the page table entry from VPN
 		TranslationEntry ptEntry = pageTable[vpn];
 
+		//Page Fault
+		if(!ptEntry.valid){
+			int ppn = pageFaultHandler(ptEntry.vpn);
+			Lib.assertTrue(ppn != -1);
+		}
+		
 		//Get the size of TLB
 		int TLBSize = Machine.processor().getTLBSize();
-		//Allocate a new TLB entry
 		TranslationEntry entry = null;
-
 		int index = -1;
 
 		for(int i = 0; i < TLBSize; i++){
 
 			entry = Machine.processor().readTLBEntry(i);
-
 			if(!entry.valid){
 				//the entry is invalid, can be replaced directly
-				//FIXME: does it need to be set to valid?
-				//FIXME: if the entry is invalid, do we need to sync it with the page table?
 				index = i;
 				break;
 			}
@@ -319,29 +332,14 @@ public class VMProcess extends UserProcess {
 		if(index == -1){
 			index = Lib.random(TLBSize);
 			entry = Machine.processor().readTLBEntry(index);
+			Lib.assertTrue(entry.valid);
+			//need to sync the TLB entry with the PTE
+            updatePageTable();
+			//updatePageTableEntry(entry.vpn, entry);
 		}
-
-		//need to sync the TLB entry with the PTE
-		if(ptEntry.valid){
-
-			//update the index entry.vpn in pageTable according to the used and dirty bits of the entry
-			updatePageTableEntry(entry.vpn, entry);
-
-			Machine.processor().writeTLBEntry(index,ptEntry);
-		}
-		//need to handle the case: ptEntry is invalid;
-		else{
-			//need to handle it in the VMKernel
-			//the pageFaultHandler need to read the data from the swap file and also need to update the
-			//ptEntry.vpn and set the entry to valid
-			int ppn = pageFaultHandler(ptEntry.vpn);
-
-			if(ppn == -1){
-				Lib.debug(dbgVM, "error occurs");
-			}
-			//the entry at the index vpn in page table has been updated. We can then write it to the TLB
-			Machine.processor().writeTLBEntry(index, pageTable[vpn]);
-		}
+		
+		Lib.assertTrue(index!=-1);
+		Machine.processor().writeTLBEntry(index,ptEntry);
 
 	}
 
@@ -352,11 +350,12 @@ public class VMProcess extends UserProcess {
 		//	System.out.println("[In updatePageTable with params] vpn at table " + vpn);
 		toUpdate.dirty = entry.dirty;
 		toUpdate.used = entry.used;
+		//toUpdate.readOnly = entry.readOnly;
 
 	}
 
 
-	private void updatePageTable(){
+	public void updatePageTable(){
 		TranslationEntry toUpdate;
 		for(int i = 0; i < Machine.processor().getTLBSize(); i++){
 			toUpdate = Machine.processor().readTLBEntry(i);
@@ -364,12 +363,48 @@ public class VMProcess extends UserProcess {
 				updatePageTableEntry(toUpdate.vpn,toUpdate);
 			}
 		}
-		//	System.out.println("updatePageTable() returns");
+	}
+
+    public void checkTLB(){
+			
+			TranslationEntry entry;
+			TranslationEntry toCompare;
+			VMProcess process;
+			for (int i=0;i<Machine.processor().getTLBSize();i++)
+			{
+				entry = Machine.processor().readTLBEntry(i);
+				
+				if(entry.valid)
+				{	
+					int vpn = entry.vpn;
+					int ppn = entry.ppn;
+					Lib.assertTrue(vpn == VMKernel.IPTable[ppn].vpn);
+
+					process = VMKernel.IPTable[ppn].currProcess;
+					
+					toCompare = process.pageTable[vpn];
+					Lib.assertTrue(toCompare.ppn == ppn);
+					if(entry.used != toCompare.used){
+						System.out.println("entry vpn ppn" + vpn + " " + ppn);
+						System.out.println("toCompare vpn ppn" + toCompare.vpn + " " + toCompare.ppn);
+						
+					}
+					Lib.assertTrue(entry.used == toCompare.used);
+					Lib.assertTrue(entry.readOnly == toCompare.readOnly);
+					Lib.assertTrue(entry.readOnly == toCompare.readOnly);
+						
+				}
+			}
+
 	}
 
 	//get the PTE by VPN
 	public TranslationEntry getPTE(int vpn){
 		return pageTable[vpn];
+	}
+
+	public void dirtyBit(int vpn, boolean setbit){
+		pageTable[vpn].dirty = setbit;
 	}
 
 	/**
